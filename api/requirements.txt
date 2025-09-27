@@ -1,0 +1,23 @@
+# Core FastAPI dependencies
+fastapi==0.104.1
+uvicorn[standard]==0.24.0
+python-multipart>=0.0.6
+pydantic==2.5.0
+
+# Scientific computing
+numpy==1.26.3
+scipy==1.11.4
+scikit-learn==1.3.2
+
+# Audio processing
+librosa==0.10.1
+soundfile==0.13.1
+
+# CPU-optimized ML libraries
+tensorflow-cpu==2.16.1
+torch==2.2.0+cpu
+torchaudio==2.2.0+cpu
+transformers==4.35.2
+
+# Additional dependencies for Docker optimization
+--index-url https://download.pytorch.org/whl/cpu

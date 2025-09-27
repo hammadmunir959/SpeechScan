@@ -1,0 +1,686 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>SpeechScan - Dysarthria Detection AI</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@100..900&display:swap" rel="stylesheet">
+    <!-- Firebase Imports for Environment Context (Kept for environment compatibility) -->
+    <script type="module">
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
+        import { getAuth, signInAnonymously, signInWithCustomToken } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
+        import { getFirestore } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+
+        // Global variables are assumed to be defined by the environment
+        if (typeof __firebase_config !== 'undefined') {
+            const firebaseConfig = JSON.parse(__firebase_config);
+            const app = initializeApp(firebaseConfig);
+            window.db = getFirestore(app);
+            window.auth = getAuth(app);
+            
+            // Authentication check (required for Firestore security rules)
+            if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
+                signInWithCustomToken(window.auth, __initial_auth_token).catch(e => console.error("Custom token sign-in failed:", e));
+            } else {
+                signInAnonymously(window.auth).catch(e => console.error("Anonymous sign-in failed:", e));
+            }
+        }
+    </script>
+    <style>
+        /* Custom font and base styling for DARK MODE */
+        body {
+            font-family: 'Inter', sans-serif;
+            margin: 0;
+            background-color: #121212; /* Dark background */
+            color: #e0e0e0; /* Light text color */
+            height: 100vh;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            overflow: hidden; 
+        }
+
+        /* Container to simulate phone screen */
+        .chat-container {
+            width: 100%;
+            max-width: 600px;
+            height: 100%;
+            background-color: #121212;
+            display: flex;
+            flex-direction: column;
+            box-shadow: 0 0 20px rgba(0, 0, 0, 0.5);
+        }
+
+        /* Dark Mode Header Style */
+        .chat-header {
+            background-color: #1e1e1e; /* Slightly lighter dark shade for header */
+            border-bottom: 1px solid #2e2e2e;
+            padding: 1rem 0.5rem;
+            position: sticky;
+            top: 0;
+            z-index: 10;
+        }
+
+        /* Chat Bubbles */
+        .message-bubble {
+            padding: 0.75rem 1rem;
+            border-radius: 18px;
+            max-width: 85%;
+            margin-bottom: 0.5rem;
+            line-height: 1.4;
+            word-wrap: break-word;
+        }
+        
+        /* Received Text Bubble (Report) - Dark Mode */
+        .received-message {
+            background-color: #2c2c2c; /* Darker bubble background */
+            border: 1px solid #3a3a3a;
+            color: #f0f0f0; /* Light text */
+            border-bottom-left-radius: 4px;
+            box-shadow: 0 1px 1px rgba(0, 0, 0, 0.2);
+        }
+
+        /* Sent Voice Bubble (User) - Remains primary color */
+        .sent-message {
+            background-color: #00897b; /* Slightly brighter teal for dark contrast */
+            color: white;
+            border-bottom-right-radius: 4px;
+            box-shadow: 0 1px 1px rgba(0, 0, 0, 0.2);
+        }
+
+        /* Report Text Styling - Dark Mode adjustments */
+        .report-key {
+            font-weight: 600;
+            color: #ffffff; /* White key text */
+            display: block;
+            margin-top: 4px;
+        }
+
+        .report-value {
+            font-weight: 500;
+            color: #cccccc; /* Light gray value text */
+            margin-left: 0;
+        }
+        
+        /* Specific Report status colors - Ensure visibility on dark background */
+        .report-value.Normal { color: #4ade80; } /* Light Green */
+        .report-value.Mild { color: #facc15; } /* Yellow */
+        .report-value.Moderate { color: #f87171; } /* Light Red */
+
+        /* Voice Message UI within Bubble */
+        .voice-ui {
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+        }
+
+        .voice-ui audio {
+            width: 100%;
+            max-width: 200px; 
+            height: 30px;
+        }
+        
+        /* Footer Input Area - Dark Mode */
+        .chat-footer {
+            background-color: #1e1e1e;
+            padding: 0.5rem;
+            border-top: 1px solid #2e2e2e;
+            position: sticky;
+            bottom: 0;
+            z-index: 10;
+        }
+        
+        /* Recording indicator (Red pulse) */
+        .recording-pulse {
+            animation: pulse 1s infinite;
+        }
+        @keyframes pulse {
+            0% { transform: scale(1); background-color: #ef4444; }
+            50% { transform: scale(1.1); background-color: #f87171; }
+            100% { transform: scale(1); background-color: #ef4444; }
+        }
+        
+        /* Loading Spinner */
+        .spinner {
+            border: 3px solid rgba(255, 255, 255, 0.3);
+            border-top: 3px solid #00897b; /* Teal spinner */
+            border-radius: 50%;
+            width: 1rem;
+            height: 1rem;
+            animation: spin 1s linear infinite;
+        }
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+    </style>
+    <!-- Lucide icons -->
+    <script src="https://unpkg.com/lucide@latest/dist/umd/lucide.js"></script>
+</head>
+<body>
+    <div class="chat-container">
+        <!-- Dark Mode Header -->
+        <header class="chat-header">
+            <div class="flex items-center justify-between">
+                <div class="flex items-center space-x-2">
+                    <!-- Back Button Placeholder -->
+                    <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" class="w-6 h-6 text-blue-400"><path d="m15 18-6-6 6-6"/></svg>
+                    <!-- Avatar Placeholder -->
+                    <div class="w-10 h-10 bg-blue-500 rounded-full flex items-center justify-center text-white text-lg font-bold">A</div>
+                    <div>
+                        <h1 class="text-lg font-semibold text-gray-100">SpeechScan</h1>
+                        <p class="text-xs text-gray-400 -mt-1">AI Assistant</p>
+                    </div>
+                </div>
+                <!-- Loading Status -->
+                <div id="loading-status" class="flex items-center space-x-2">
+                    <div class="text-sm text-gray-300">
+                        <div id="loading-text">Loading models...</div>
+                        <div class="w-32 bg-gray-700 rounded-full h-2 mt-1">
+                            <div id="loading-bar" class="bg-blue-500 h-2 rounded-full transition-all duration-300" style="width: 0%"></div>
+                        </div>
+                        <div class="flex justify-between text-xs text-gray-400 mt-1">
+                            <span id="step-info">Step 0/8</span>
+                            <span id="time-remaining">ETA: Unknown</span>
+                        </div>
+                        <div id="progress-details" class="text-xs text-gray-500 mt-1 max-w-32 truncate">
+                            Initializing...
+                        </div>
+                    </div>
+                    <div id="loading-icon" class="w-6 h-6">
+                        <div class="spinner"></div>
+                    </div>
+                </div>
+            </div>
+        </header>
+
+        <!-- Chat Content Area -->
+        <main id="chat-messages" class="flex-grow p-4 overflow-y-auto bg-[#121212]">
+            <!-- Initial Context/System Message -->
+            <div class="flex justify-center text-center my-4">
+                <div class="max-w-md text-xs text-gray-300 p-2 rounded-lg bg-[#2c2c2c] shadow-md border border-[#3a3a3a]">
+                    <p class="font-bold text-gray-200 mb-1">SpeechScan - Live Recording & File Upload Mode</p>
+                    <p class="text-left">This application captures **live audio** or accepts **uploaded audio** and submits it to the API endpoint at **http://localhost:8000/predict** for analysis.</p>
+                    <p class="mt-2 text-xs font-semibold text-blue-400" id="instruction-text">Loading models... Please wait.</p>
+                </div>
+            </div>
+            
+            <!-- Dynamic Messages will be appended here -->
+        </main>
+
+        <!-- Footer Input Area -->
+        <footer class="chat-footer">
+            <div class="flex items-center space-x-3">
+                 <!-- Clip Button -->
+                <button id="clip-button" class="w-10 h-10 text-gray-400 rounded-full flex items-center justify-center transition duration-150 ease-in-out hover:bg-[#2c2c2c]" disabled>
+                    <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="w-5 h-5 lucide lucide-paperclip"><path d="m21.44 11.05-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"/></svg>
+                </button>
+                <!-- Hidden File Input -->
+                <input type="file" id="audio-file-input" accept="audio/webm, audio/wav, audio/mp3, audio/ogg" class="hidden">
+
+                <!-- Text Input Placeholder (Recording Status) -->
+                <input type="text" id="text-input" placeholder="Tap mic or clip to submit voice sample..." 
+                       class="flex-grow bg-[#2c2c2c] text-gray-100 border border-[#3a3a3a] rounded-full py-2 px-4 focus:outline-none focus:ring-1 focus:ring-blue-500" disabled>
+                
+                <!-- Microphone/Send Button -->
+                <button id="mic-button" class="w-10 h-10 bg-gray-500 rounded-full flex items-center justify-center text-white shadow-lg transition duration-150 ease-in-out" disabled>
+                    <svg id="mic-icon" xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="w-5 h-5"><path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3Z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" x2="12" y1="19" y2="22"/></svg>
+                </button>
+            </div>
+            <div id="status-message" class="text-center text-xs text-gray-400 mt-1 h-4"></div>
+        </footer>
+    </div>
+
+    <script>
+        document.addEventListener('DOMContentLoaded', () => {
+            lucide.createIcons();
+            // The API endpoint for the backend (same server)
+            const API_ENDPOINT = '/predict';
+            const LOADING_STATUS_ENDPOINT = '/loading-status';
+            
+            // DOM Elements
+            const chatMessages = document.getElementById('chat-messages');
+            const micButton = document.getElementById('mic-button');
+            const micIcon = document.getElementById('mic-icon');
+            const statusMessage = document.getElementById('status-message');
+            const textInput = document.getElementById('text-input');
+            const clipButton = document.getElementById('clip-button');
+            const audioFileInput = document.getElementById('audio-file-input');
+            const loadingText = document.getElementById('loading-text');
+            const loadingBar = document.getElementById('loading-bar');
+            const loadingIcon = document.getElementById('loading-icon');
+            const instructionText = document.getElementById('instruction-text');
+
+            // Recording State
+            let isRecording = false;
+            let mediaRecorder = null;
+            let recordedChunks = [];
+            let recordingStartTime = null;
+            let recordingTimerInterval = null;
+            let stream = null; // Store the microphone stream
+            
+            // Loading State
+            let modelsLoaded = false;
+            let loadingCheckInterval = null;
+            let websocket = null;
+            let reconnectAttempts = 0;
+            const maxReconnectAttempts = 5;
+
+            // --- Utility Functions ---
+
+            const scrollToBottom = () => {
+                chatMessages.scrollTop = chatMessages.scrollHeight;
+            };
+            
+            // --- WebSocket Functions ---
+            
+            const connectWebSocket = () => {
+                const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+                const wsUrl = `${protocol}//${window.location.host}/ws`;
+                
+                websocket = new WebSocket(wsUrl);
+                
+                websocket.onopen = () => {
+                    console.log('🔌 WebSocket connected');
+                    reconnectAttempts = 0;
+                };
+                
+                websocket.onmessage = (event) => {
+                    try {
+                        const data = JSON.parse(event.data);
+                        handleWebSocketMessage(data);
+                    } catch (error) {
+                        console.error('Error parsing WebSocket message:', error);
+                    }
+                };
+                
+                websocket.onclose = () => {
+                    console.log('🔌 WebSocket disconnected');
+                    if (reconnectAttempts < maxReconnectAttempts && !modelsLoaded) {
+                        reconnectAttempts++;
+                        console.log(`🔄 Attempting to reconnect... (${reconnectAttempts}/${maxReconnectAttempts})`);
+                        setTimeout(connectWebSocket, 2000 * reconnectAttempts);
+                    }
+                };
+                
+                websocket.onerror = (error) => {
+                    console.error('❌ WebSocket error:', error);
+                };
+            };
+            
+            const handleWebSocketMessage = (data) => {
+                console.log('📨 WebSocket message:', data);
+                
+                switch (data.type) {
+                    case 'connection_established':
+                    case 'progress_update':
+                        updateLoadingUI(data);
+                        // Enable controls if loading is complete or if we have some models available
+                        if (data.progress >= 100 || (data.loaded && data.progress >= 70)) {
+                            modelsLoaded = true;
+                            enableControls();
+                        }
+                        break;
+                    case 'loading_complete':
+                        updateLoadingUI(data);
+                        modelsLoaded = true;
+                        enableControls();
+                        break;
+                    case 'loading_error':
+                        updateLoadingUI(data);
+                        console.error('❌ Model loading error:', data.details);
+                        // Still enable controls for partial functionality
+                        if (data.progress >= 70) {
+                            modelsLoaded = true;
+                            enableControls();
+                        }
+                        break;
+                }
+            };
+            
+            const updateLoadingUI = (data) => {
+                loadingText.textContent = data.status;
+                loadingBar.style.width = `${data.progress}%`;
+                
+                // Update progress details
+                const progressDetails = document.getElementById('progress-details');
+                if (progressDetails) {
+                    progressDetails.textContent = data.details || '';
+                }
+                
+                // Update step information
+                const stepInfo = document.getElementById('step-info');
+                if (stepInfo && data.step_number && data.total_steps) {
+                    stepInfo.textContent = `Step ${data.step_number}/${data.total_steps}`;
+                }
+                
+                // Update time remaining
+                const timeRemaining = document.getElementById('time-remaining');
+                if (timeRemaining && data.estimated_time_remaining) {
+                    timeRemaining.textContent = `ETA: ${data.estimated_time_remaining}`;
+                }
+                
+                if (data.loaded) {
+                    loadingIcon.innerHTML = `
+                        <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="w-6 h-6 text-green-500">
+                            <path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/>
+                            <polyline points="22,4 12,14.01 9,11.01"/>
+                        </svg>
+                    `;
+                    loadingBar.classList.remove('bg-blue-500');
+                    loadingBar.classList.add('bg-green-500');
+                }
+            };
+            
+            const enableControls = () => {
+                micButton.disabled = false;
+                clipButton.disabled = false;
+                textInput.disabled = false;
+                micButton.classList.remove('bg-gray-500');
+                micButton.classList.add('bg-[#00897b]');
+                clipButton.classList.remove('text-gray-400');
+                clipButton.classList.add('text-gray-300');
+                instructionText.textContent = 'Tap the microphone to record, or use the clip icon to upload a file.';
+            };
+            
+            const disableControls = () => {
+                micButton.disabled = true;
+                clipButton.disabled = true;
+                textInput.disabled = true;
+                micButton.classList.add('bg-gray-500');
+                micButton.classList.remove('bg-[#00897b]');
+                clipButton.classList.add('text-gray-400');
+                clipButton.classList.remove('text-gray-300');
+            };
+            
+            const getTimestamp = () => {
+                return new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+            };
+
+            const updateTimer = () => {
+                const elapsed = Date.now() - recordingStartTime;
+                const seconds = Math.floor(elapsed / 1000);
+                const minutes = Math.floor(seconds / 60);
+                const remainingSeconds = seconds % 60;
+                
+                const timerText = `${minutes.toString().padStart(2, '0')}:${remainingSeconds.toString().padStart(2, '0')}`;
+                
+                // Update text input with timer
+                textInput.placeholder = 'Recording... ' + timerText;
+            };
+
+            // --- UI Rendering Functions ---
+
+            const createVoiceMessage = (audioUrl, duration, timestamp) => {
+                const messageDiv = document.createElement('div');
+                messageDiv.className = 'flex justify-end';
+                
+                // Format duration
+                const totalSeconds = Math.round(duration);
+                const minutes = Math.floor(totalSeconds / 60);
+                const seconds = totalSeconds % 60;
+                const durationText = `${minutes}:${String(seconds).padStart(2, '0')}`;
+
+                messageDiv.innerHTML = `
+                    <div class="message-bubble sent-message">
+                        <div class="voice-ui">
+                            <audio controls src="${audioUrl}" class="rounded-full bg-white"></audio>
+                            <span class="text-xs opacity-70">${durationText}</span>
+                        </div>
+                        <div class="text-[10px] text-right opacity-70 mt-1">${timestamp}</div>
+                    </div>
+                `;
+                return messageDiv;
+            };
+
+            const createTextReport = (report, timestamp) => {
+                const messageDiv = document.createElement('div');
+                messageDiv.className = 'flex justify-start';
+                
+                let statusColor = '';
+                // Determine Tailwind class names based on report status
+                if (report.status && report.status.includes('Normal')) statusColor = 'Normal';
+                else if (report.status && report.status.includes('Mild')) statusColor = 'Mild';
+                else if (report.status && (report.status.includes('Moderate') || report.status.includes('Severe'))) statusColor = 'Moderate';
+
+                messageDiv.innerHTML = `
+                    <div class="message-bubble received-message">
+                        <p class="text-sm font-semibold text-gray-100 border-b border-gray-600 pb-1 mb-1">SpeechScan Analysis Report:</p>
+                        <div class="text-xs">
+                            <div class="mt-1"><span class="report-key">Status:</span><span class="report-value ${statusColor} font-bold">${report.status || 'N/A'}</span></div>
+                            <div class="mt-1"><span class="report-key">Clarity Score:</span><span class="report-value">${report.clarityScore || 'N/A'}</span></div>
+                            <div class="mt-1"><span class="report-key">Speech Rate:</span><span class="report-value">${report.speechRate || 'N/A'}</span></div>
+                            <div class="mt-1"><span class="report-key">Acoustic Notes:</span><span class="report-value">${report.acousticNotes || 'No specific notes provided.'}</span></div>
+                        </div>
+                        <div class="text-[10px] text-right text-gray-500 mt-1">${timestamp}</div>
+                    </div>
+                `;
+                return messageDiv;
+            };
+            
+            const renderError = (message) => {
+                const messageDiv = document.createElement('div');
+                messageDiv.className = 'flex justify-start';
+                messageDiv.innerHTML = `
+                    <div class="message-bubble received-message bg-red-800 border-red-600 text-red-200">
+                        <p class="font-bold text-sm">Error connecting to local API:</p>
+                        <p class="text-xs">${message}</p>
+                        <p class="text-xs mt-2 font-semibold">Please ensure your mock backend is running at ${API_ENDPOINT}</p>
+                    </div>
+                `;
+                chatMessages.appendChild(messageDiv);
+                scrollToBottom();
+            };
+            
+            const setControlsDisabled = (disabled) => {
+                if (!modelsLoaded) return; // Don't enable if models aren't loaded
+                micButton.disabled = disabled;
+                clipButton.disabled = disabled;
+                textInput.placeholder = disabled ? 'Processing request...' : 'Tap mic or clip to submit voice sample...';
+            }
+
+
+            // --- Generic Analysis Function (used for both recorded and uploaded audio) ---
+            
+            const analyzeAudioBlob = async (audioBlob, fileName) => {
+                const timestamp = getTimestamp();
+                let duration = 0;
+                
+                // 1. Create Audio URL and determine duration
+                const audioUrl = URL.createObjectURL(audioBlob);
+
+                // Await for metadata to load to get duration with error/timeout handling
+                try {
+                    setControlsDisabled(true);
+                    micIcon.innerHTML = `<div class="spinner"></div>`;
+                    statusMessage.textContent = 'Submitting audio for analysis...';
+
+                    const audio = new Audio(audioUrl);
+                    await new Promise((resolve, reject) => {
+                        audio.onloadedmetadata = () => {
+                            duration = audio.duration;
+                            resolve();
+                        };
+                        audio.onerror = () => reject(new Error("Failed to load audio metadata."));
+                        setTimeout(() => reject(new Error("Audio metadata timeout.")), 5000); 
+                    });
+                } catch (e) {
+                    console.error('Audio duration error:', e);
+                    // This is a warning, we proceed with duration=0 if metadata fails
+                }
+                
+                // 2. Display User Message
+                const sentMsg = createVoiceMessage(audioUrl, duration, timestamp);
+                chatMessages.appendChild(sentMsg);
+                scrollToBottom();
+
+                // 3. Prepare and Send to Mock API
+                const uploadFile = new File([audioBlob], fileName, { type: audioBlob.type });
+                const formData = new FormData();
+                formData.append('file', uploadFile);
+
+                try {
+                    const response = await fetch(API_ENDPOINT, {
+                        method: 'POST',
+                        body: formData
+                    });
+
+                    if (!response.ok) {
+                        const errorText = await response.text();
+                        throw new Error(`API returned status ${response.status}. Response: ${errorText.substring(0, 100)}...`);
+                    }
+
+                    const data = await response.json();
+                    
+                    // 4. Display Report
+                    const receivedMsg = createTextReport(data, getTimestamp());
+                    chatMessages.appendChild(receivedMsg);
+                    scrollToBottom();
+                    
+                    statusMessage.textContent = 'Analysis complete. Click mic or clip for next sample.';
+
+                } catch (error) {
+                    console.error("API Submission Error:", error);
+                    renderError(`Could not reach or process response from ${API_ENDPOINT}. Error: ${error.message}`);
+                    statusMessage.textContent = 'Analysis failed. Check console for details.';
+                } finally {
+                    // Reset UI
+                    setControlsDisabled(false);
+                    micIcon.innerHTML = `<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="w-5 h-5"><path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3Z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" x2="12" y1="19" y2="22"/></svg>`;
+                }
+            };
+            
+            // --- Microphone Recording Functions ---
+            
+            const startRecording = async () => {
+                try {
+                    // Request microphone access
+                    stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+                    
+                    // Use audio/webm format (widely supported)
+                    mediaRecorder = new MediaRecorder(stream, { mimeType: 'audio/webm' });
+                    
+                    recordedChunks = [];
+                    mediaRecorder.ondataavailable = (event) => {
+                        if (event.data.size > 0) {
+                            recordedChunks.push(event.data);
+                        }
+                    };
+                    
+                    mediaRecorder.onstop = () => {
+                        // All tracks MUST be stopped after recording to release microphone
+                        stream.getTracks().forEach(track => track.stop());
+                        
+                        const audioBlob = new Blob(recordedChunks, { type: 'audio/webm' });
+                        const fileName = `speech_sample_${Date.now()}.webm`;
+                        analyzeAudioBlob(audioBlob, fileName);
+                    };
+                    
+                    // Start recorder
+                    mediaRecorder.start();
+                    
+                    // Update state and UI
+                    isRecording = true;
+                    micButton.classList.add('bg-red-600', 'recording-pulse');
+                    micButton.classList.remove('bg-[#00897b]');
+                    clipButton.disabled = true; // Disable clip while recording
+                    micIcon.innerHTML = `<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="w-5 h-5"><rect width="18" height="18" x="3" y="3" rx="2"/></svg>`; // Square icon for stop
+                    
+                    // Start timer
+                    recordingStartTime = Date.now();
+                    recordingTimerInterval = setInterval(updateTimer, 500);
+                    
+                    statusMessage.textContent = 'Tap again to stop and submit.';
+                    textInput.placeholder = 'Recording... 0:00';
+
+                } catch (error) {
+                    console.error('Microphone access denied or failed:', error);
+                    statusMessage.textContent = 'Error: Microphone access denied or failed. Please check permissions.';
+                    // Reset UI
+                    isRecording = false;
+                    micButton.classList.remove('bg-red-600', 'recording-pulse');
+                    micButton.classList.add('bg-[#00897b]');
+                    clipButton.disabled = false;
+                    textInput.placeholder = 'Tap mic or clip to submit voice sample...';
+                }
+            };
+
+            const stopRecording = () => {
+                if (mediaRecorder && mediaRecorder.state !== 'inactive') {
+                    mediaRecorder.stop();
+                }
+                
+                // Clear timer and reset UI
+                clearInterval(recordingTimerInterval);
+                isRecording = false;
+                micButton.classList.remove('bg-red-600', 'recording-pulse');
+                micButton.classList.add('bg-[#00897b]');
+                // The analyzeAudioBlob function will handle disabling/enabling controls
+            };
+
+            // --- Main Event Handlers ---
+
+            micButton.addEventListener('click', () => {
+                if (!modelsLoaded) {
+                    statusMessage.textContent = 'Models are still loading. Please wait...';
+                    return;
+                }
+                if (isRecording) {
+                    stopRecording();
+                } else {
+                    startRecording();
+                }
+            });
+            
+            clipButton.addEventListener('click', () => {
+                if (!modelsLoaded) {
+                    statusMessage.textContent = 'Models are still loading. Please wait...';
+                    return;
+                }
+                // Open the hidden file dialog
+                if (!micButton.disabled) {
+                    audioFileInput.click();
+                }
+            });
+
+            audioFileInput.addEventListener('change', (event) => {
+                if (!modelsLoaded) {
+                    statusMessage.textContent = 'Models are still loading. Please wait...';
+                    return;
+                }
+                const file = event.target.files[0];
+                if (file) {
+                    // Reset the input so the same file can be uploaded again
+                    audioFileInput.value = '';
+                    
+                    // Validate file type (though accept attribute should handle most)
+                    if (!file.type.startsWith('audio/')) {
+                         statusMessage.textContent = 'Error: Only audio files are supported.';
+                         return;
+                    }
+                    
+                    // Start the analysis pipeline for the uploaded file
+                    analyzeAudioBlob(file, file.name);
+                }
+            });
+
+            // Set initial state
+            scrollToBottom();
+            disableControls();
+            
+            // Connect to WebSocket for real-time updates
+            connectWebSocket();
+            
+            // Fallback: Enable controls after 30 seconds if WebSocket doesn't work
+            setTimeout(() => {
+                if (!modelsLoaded) {
+                    console.log('⏰ Fallback: Enabling controls after timeout');
+                    modelsLoaded = true;
+                    enableControls();
+                }
+            }, 30000);
+        });
+    </script>
+</body>
+</html>
