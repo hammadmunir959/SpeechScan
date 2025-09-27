@@ -189,7 +189,6 @@ temp/
 data/
 ProcessedData/
 test/
-notebook/
 
 # Additional unnecessary files
 build.sh
