@@ -515,7 +515,7 @@
                 chatMessages.appendChild(sentMsg);
                 scrollToBottom();
 
-                // 3. Prepare and Send to Mock API
+                // 3. Prepare and Send to API
                 const uploadFile = new File([audioBlob], fileName, { type: audioBlob.type });
                 const formData = new FormData();
                 formData.append('file', uploadFile);
@@ -531,21 +531,47 @@
                         throw new Error(`API returned status ${response.status}. Response: ${errorText.substring(0, 100)}...`);
                     }
 
-                    const data = await response.json();
-                    
-                    // 4. Display Report
-                    const receivedMsg = createTextReport(data, getTimestamp());
-                    chatMessages.appendChild(receivedMsg);
-                    scrollToBottom();
-                    
-                    statusMessage.textContent = 'Analysis complete. Click mic or clip for next sample.';
+                    const jobData = await response.json();
+                    const jobId = jobData.job_id;
+                    console.log("Job submitted, ID:", jobId);
+                    statusMessage.textContent = 'Audio uploaded. Analyzing (this may take a minute)...';
+
+                    // 4. Start Polling for Results
+                    const pollResult = async () => {
+                        try {
+                            const res = await fetch(`/results/${jobId}`);
+                            if (!res.ok) throw new Error("Failed to fetch results");
+                            
+                            const statusData = await res.json();
+                            
+                            if (statusData.status === 'completed') {
+                                // Display Report
+                                const receivedMsg = createTextReport(statusData.result, getTimestamp());
+                                chatMessages.appendChild(receivedMsg);
+                                scrollToBottom();
+                                statusMessage.textContent = 'Analysis complete.';
+                                setControlsDisabled(false);
+                                micIcon.innerHTML = `<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="w-5 h-5"><path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3Z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" x2="12" y1="19" y2="22"/></svg>`;
+                            } else if (statusData.status === 'failed') {
+                                throw new Error(statusData.error || "Inference failed");
+                            } else {
+                                // Still pending
+                                setTimeout(pollResult, 2000); // Poll every 2 seconds
+                            }
+                        } catch (err) {
+                            console.error("Polling error:", err);
+                            renderError(err.message);
+                            setControlsDisabled(false);
+                            micIcon.innerHTML = `<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="w-5 h-5"><path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3Z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" x2="12" y1="19" y2="22"/></svg>`;
+                        }
+                    };
+
+                    pollResult();
 
                 } catch (error) {
-                    console.error("API Submission Error:", error);
-                    renderError(`Could not reach or process response from ${API_ENDPOINT}. Error: ${error.message}`);
-                    statusMessage.textContent = 'Analysis failed. Check console for details.';
-                } finally {
-                    // Reset UI
+                    console.error("Submission Error:", error);
+                    renderError(`Could not submit audio. Error: ${error.message}`);
+                    statusMessage.textContent = 'Submission failed.';
                     setControlsDisabled(false);
                     micIcon.innerHTML = `<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="w-5 h-5"><path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3Z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" x2="12" y1="19" y2="22"/></svg>`;
                 }

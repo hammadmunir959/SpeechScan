@@ -5,13 +5,13 @@ Provides REST API and WebSocket endpoints for real-time audio analysis
 """
 
 import os
-import sys
 import json
 import time
 import asyncio
+import uuid
 import logging
 from pathlib import Path
-from typing import Optional, Dict, Any
+from typing import Optional, Dict, Any, List
 from contextlib import asynccontextmanager
 
 import uvicorn
@@ -21,20 +21,18 @@ from fastapi.responses import HTMLResponse
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 import numpy as np
+from celery.result import AsyncResult
 
-# Add parent directory to path to import predict module
-sys.path.append(str(Path(__file__).parent.parent))
-from predict import DysarthriaGenderPredictor
+from api.celery_app import app as celery_app
+from api.tasks import predict_task
+from api.config import settings
+from api.logging_config import setup_logging
 
-# Configure logging
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
-)
+# Initialize structured logging
+setup_logging()
 logger = logging.getLogger(__name__)
 
-# Global variables for model and loading state
-predictor: Optional[DysarthriaGenderPredictor] = None
+# Global loading state
 loading_progress = {
     "loaded": False,
     "progress": 0,
@@ -60,148 +58,26 @@ class PredictionResponse(BaseModel):
     clarityScore: str
     speechRate: str
     acousticNotes: str
+    disclaimer: str = settings.MEDICAL_DISCLAIMER
 
-def _load_predictor_safely(model_dir):
-    """Safely load the predictor with error handling"""
-    try:
-        # Set environment variables to help with TensorFlow compatibility
-        import os
-        os.environ['TF_CPP_MIN_LOG_LEVEL'] = '2'  # Reduce TensorFlow logging
-        os.environ['CUDA_VISIBLE_DEVICES'] = ''  # Force CPU usage
-        
-        from predict import DysarthriaGenderPredictor
-        return DysarthriaGenderPredictor(model_dir)
-    except Exception as e:
-        logger.error(f"Error in _load_predictor_safely: {e}")
-        raise e
+# Note: Predictor loading moved to Celery worker in Phase 2
 
 async def load_models_async():
-    """Load models asynchronously and update progress"""
-    global predictor, loading_progress
-    
-    try:
-        logger.info("🚀 Starting model loading process...")
-        
-        # Step 1: Check model directory
-        logger.info("📁 Step 1: Checking model directory...")
-        loading_progress.update({
-            "progress": 5,
-            "status": "Checking model directory...",
-            "details": "Verifying ProcessedData/models directory exists",
-            "step_number": 1
-        })
-        await broadcast_loading_update()
-        
-        model_dir = Path("../ProcessedData/models")
-        if not model_dir.exists():
-            raise FileNotFoundError(f"Model directory not found: {model_dir}")
-        
-        model_file = model_dir / "best_wav2vec2_fnn_model.h5"
-        if not model_file.exists():
-            raise FileNotFoundError(f"Model file not found: {model_file}")
-        
-        logger.info(f"✅ Model directory found: {model_dir}")
-        await asyncio.sleep(0.2)
-        
-        # Step 2: Initialize predictor (this is where the actual loading happens)
-        logger.info("🤖 Step 2: Initializing DysarthriaGenderPredictor...")
-        loading_progress.update({
-            "progress": 10,
-            "status": "Initializing predictor...",
-            "details": "Creating DysarthriaGenderPredictor instance",
-            "step_number": 2
-        })
-        await broadcast_loading_update()
-        
-        # Run the actual model loading in a thread pool with error handling
-        import concurrent.futures
-        logger.info("⏳ Starting model loading in background thread...")
-        
-        try:
-            with concurrent.futures.ThreadPoolExecutor() as executor:
-                future = executor.submit(self._load_predictor_safely, "../ProcessedData/models")
-                
-                # Monitor progress while loading
-                while not future.done():
-                    loading_progress.update({
-                        "progress": min(loading_progress["progress"] + 2, 90),
-                        "status": "Loading models...",
-                        "details": "Loading TensorFlow and Wav2Vec2 models",
-                        "step_number": 3
-                    })
-                    await broadcast_loading_update()
-                    await asyncio.sleep(1)
-                
-                # Get the result
-                predictor = future.result()
-                logger.info("✅ DysarthriaGenderPredictor initialized successfully")
-                
-        except Exception as e:
-            logger.error(f"❌ Model loading failed: {e}")
-            # Fall back to simplified mode
-            logger.info("🔄 Falling back to simplified mode...")
-            predictor = None
-            loading_progress.update({
-                "loaded": True,
-                "progress": 100,
-                "status": "Models loaded (Simplified Mode)",
-                "details": "Using mock predictions due to compatibility issues",
-                "step_number": 4,
-                "estimated_time_remaining": "0s"
-            })
-            await broadcast_loading_update()
-            return
-        
-        # Step 3: Model validation
-        logger.info("🔍 Step 3: Validating loaded models...")
-        loading_progress.update({
-            "progress": 95,
-            "status": "Validating models...",
-            "details": "Testing model components",
-            "step_number": 4
-        })
-        await broadcast_loading_update()
-        
-        # Test the predictor with a simple check
-        if predictor.tf_model is None:
-            raise RuntimeError("TensorFlow model not loaded")
-        if predictor.processor is None:
-            raise RuntimeError("Wav2Vec2 processor not loaded")
-        if predictor.wav2vec_model is None:
-            raise RuntimeError("Wav2Vec2 model not loaded")
-        
-        logger.info("✅ Model validation completed")
-        await asyncio.sleep(0.2)
-        
-        # Step 4: Complete
-        logger.info("🎉 Step 4: Model loading completed successfully!")
-        loading_progress.update({
-            "loaded": True,
-            "progress": 100,
-            "status": "Models loaded successfully!",
-            "details": "Ready for audio analysis",
-            "step_number": 5,
-            "estimated_time_remaining": "0s"
-        })
-        await broadcast_loading_update()
-        
-        logger.info("✅ All models loaded successfully and ready for predictions")
-        
-    except Exception as e:
-        logger.error(f"❌ Error loading models: {e}")
-        logger.error(f"❌ Error type: {type(e).__name__}")
-        import traceback
-        logger.error(f"❌ Traceback: {traceback.format_exc()}")
-        
-        loading_progress.update({
-            "loaded": False,
-            "progress": 0,
-            "status": f"Loading failed: {str(e)}",
-            "details": "Check logs for details",
-            "step_number": 0,
-            "estimated_time_remaining": "Unknown"
-        })
-        await broadcast_loading_update()
+    """
+    NOTE: In the new async architecture, models are loaded by the Celery worker,
+    not the API process. The API process only handles metadata and job submission.
+    This function is kept for showing status but won't hold a 'predictor'.
+    """
+    global loading_progress
+    loading_progress.update({
+        "loaded": True,
+        "progress": 100,
+        "status": "API Ready",
+        "details": "ML inference moved to background workers",
+        "step_number": 1,
+        "total_steps": 1
+    })
+    await broadcast_loading_update()
 
 async def broadcast_loading_update():
     """Broadcast loading update to all connected WebSocket clients"""
@@ -220,11 +96,17 @@ async def broadcast_loading_update():
         # Remove disconnected clients
         websocket_connections -= disconnected
 
+from api.database import db
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Application lifespan manager"""
     # Startup
     logger.info("🚀 Starting SpeechScan API...")
+    
+    # Initialize persistence (though API mainly reads/polls, 
+    # it's good to ensure connectivity)
+    db.initialize()
     
     # Start model loading in background
     asyncio.create_task(load_models_async())
@@ -236,16 +118,16 @@ async def lifespan(app: FastAPI):
 
 # Create FastAPI app
 app = FastAPI(
-    title="SpeechScan API",
+    title=settings.APP_NAME,
     description="Dysarthria Detection and Gender Classification API",
-    version="1.0.0",
+    version=settings.APP_VERSION,
     lifespan=lifespan
 )
 
 # Add CORS middleware
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=settings.ALLOWED_ORIGINS,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -290,36 +172,7 @@ async def websocket_endpoint(websocket: WebSocket):
         websocket_connections.discard(websocket)
         logger.info("WebSocket client disconnected")
 
-def format_mock_prediction_response(file_name: str) -> PredictionResponse:
-    """Format mock prediction result for web interface"""
-    import random
-    
-    # Generate mock results
-    statuses = ["Normal", "Mild", "Moderate"]
-    status = random.choice(statuses)
-    
-    clarity_score = f"{random.uniform(0.3, 0.9):.2f}"
-    
-    speech_rates = ["High-pitched", "Normal-pitched", "Low-pitched"]
-    speech_rate = random.choice(speech_rates)
-    
-    f0_mean = random.uniform(80, 200)
-    processing_time = random.uniform(1.0, 3.0)
-    
-    acoustic_notes = [
-        f"Mock analysis of {file_name}",
-        f"Fundamental frequency: {f0_mean:.1f} Hz",
-        f"Confidence level: {'High' if float(clarity_score) > 0.7 else 'Medium'}",
-        f"Processing time: {processing_time:.2f}s",
-        "Note: This is a simulated result for testing"
-    ]
-    
-    return PredictionResponse(
-        status=status,
-        clarityScore=clarity_score,
-        speechRate=speech_rate,
-        acousticNotes="; ".join(acoustic_notes)
-    )
+
 
 def format_prediction_response(prediction_result: Dict[str, Any]) -> PredictionResponse:
     """Format prediction result for web interface"""
@@ -388,7 +241,8 @@ def format_prediction_response(prediction_result: Dict[str, Any]) -> PredictionR
             status=status,
             clarityScore=clarity_score,
             speechRate=speech_rate,
-            acousticNotes=acoustic_notes_str
+            acousticNotes=acoustic_notes_str,
+            disclaimer=settings.MEDICAL_DISCLAIMER
         )
         
     except Exception as e:
@@ -400,78 +254,81 @@ def format_prediction_response(prediction_result: Dict[str, Any]) -> PredictionR
             acousticNotes=f"Error processing results: {str(e)}"
         )
 
-@app.post("/predict", response_model=PredictionResponse)
+class JobResponse(BaseModel):
+    job_id: str
+    status: str
+    message: str
+
+@app.post("/predict", response_model=JobResponse)
 async def predict_audio(file: UploadFile = File(...)):
-    """Predict dysarthria and gender from uploaded audio file"""
-    
-    # Check if models are loaded
-    if not loading_progress["loaded"]:
-        raise HTTPException(
-            status_code=503, 
-            detail="Models are still loading. Please wait and try again."
-        )
+    """Submit audio file for background analysis"""
     
     # Validate file type
-    if not file.content_type or not file.content_type.startswith('audio/'):
-        raise HTTPException(
-            status_code=400,
-            detail="Invalid file type. Please upload an audio file."
-        )
+    allowed_types = ["audio/wav", "audio/mp3", "audio/mpeg", "audio/ogg", "audio/x-m4a", "audio/webm"]
+    if not file.content_type or file.content_type not in allowed_types:
+        if not (file.content_type and "webm" in file.content_type):
+            raise HTTPException(
+                status_code=400,
+                detail=f"Invalid file type: {file.content_type}. Supported: wav, mp3, ogg, webm"
+            )
     
     try:
-        # Save uploaded file temporarily
-        temp_file_path = f"temp_audio_{int(time.time())}.webm"
+        # Save uploaded file temporarily with UUID
+        file_ext = file.filename.split('.')[-1] if file.filename else "webm"
+        if len(file_ext) > 5 or not file_ext.isalnum():
+            file_ext = "webm"
+            
+        temp_filename = f"temp_audio_{uuid.uuid4()}.{file_ext}"
+        # ABSOLUTE path is safer for passing to worker if using shared volume
+        temp_file_path = os.path.abspath(temp_filename)
         
         with open(temp_file_path, "wb") as buffer:
-            content = await file.read()
-            buffer.write(content)
+            while content := await file.read(1024 * 1024):
+                buffer.write(content)
         
-        logger.info(f"Processing audio file: {file.filename}")
+        logger.info(f"Received file: {file.filename} -> {temp_file_path}")
         
-        # Check if we have a real predictor or need to use mock
-        if predictor is not None:
-            # Use real model prediction
-            try:
-                prediction_result = predictor.predict(temp_file_path)
-                
-                # Check for errors in prediction
-                if "error" in prediction_result:
-                    raise HTTPException(
-                        status_code=500,
-                        detail=f"Prediction failed: {prediction_result['error']}"
-                    )
-                
-                # Format response for web interface
-                response = format_prediction_response(prediction_result)
-                logger.info(f"Real prediction completed: {response.status}")
-                
-            except Exception as e:
-                logger.error(f"Real prediction failed, falling back to mock: {e}")
-                # Fall back to mock prediction
-                response = format_mock_prediction_response(file.filename or "unknown")
-                logger.info(f"Mock prediction completed: {response.status}")
-        else:
-            # Use mock prediction
-            await asyncio.sleep(1)  # Simulate processing time
-            response = format_mock_prediction_response(file.filename or "unknown")
-            logger.info(f"Mock prediction completed: {response.status}")
+        # Submit task to Celery
+        task = predict_task.delay(temp_file_path)
+        logger.info(f"Task submitted: {task.id}")
         
-        # Clean up temporary file
-        try:
-            os.remove(temp_file_path)
-        except:
-            pass
-        
-        return response
-        
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"Unexpected error during prediction: {e}")
-        raise HTTPException(
-            status_code=500,
-            detail=f"Internal server error: {str(e)}"
+        return JobResponse(
+            job_id=task.id,
+            status="pending",
+            message="Audio submitted for analysis"
         )
+        
+    except Exception as e:
+        logger.error(f"Error submitting job: {e}")
+        # Cleanup if it failed before submission
+        if 'temp_file_path' in locals() and os.path.exists(temp_file_path):
+            os.remove(temp_file_path)
+        raise HTTPException(status_code=500, detail=f"Job submission failed: {str(e)}")
+
+class StatusResponse(BaseModel):
+    job_id: str
+    status: str
+    result: Optional[PredictionResponse] = None
+    error: Optional[str] = None
+
+@app.get("/results/{job_id}", response_model=StatusResponse)
+async def get_results(job_id: str):
+    """Check status and retrieve results of a prediction job"""
+    task_result = AsyncResult(job_id, app=celery_app)
+    
+    if task_result.status == 'PENDING':
+        return StatusResponse(job_id=job_id, status="pending")
+    elif task_result.status == 'SUCCESS':
+        result_data = task_result.result
+        if "error" in result_data:
+            return StatusResponse(job_id=job_id, status="failed", error=result_data["error"])
+            
+        formatted_result = format_prediction_response(result_data)
+        return StatusResponse(job_id=job_id, status="completed", result=formatted_result)
+    elif task_result.status == 'FAILURE':
+        return StatusResponse(job_id=job_id, status="failed", error=str(task_result.info))
+    else:
+        return StatusResponse(job_id=job_id, status=task_result.status.lower())
 
 @app.get("/health")
 async def health_check():

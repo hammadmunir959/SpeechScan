@@ -20,4 +20,19 @@ torchaudio==2.2.0+cpu
 transformers==4.35.2
 
 # Additional dependencies for Docker optimization
---index-url https://download.pytorch.org/whl/cpu
+--extra-index-url https://download.pytorch.org/whl/cpu
+
+# Async task processing
+celery==5.3.6
+redis==5.0.1
+
+# Configuration & Validation
+pydantic-settings==2.1.0
+python-multipart==0.0.6
+
+# Persistence & Cloud
+firebase-admin==6.2.0
+boto3==1.28.62
+
+
+
