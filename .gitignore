@@ -202,3 +202,4 @@ api/simple_test.py
 api/test_api.py
 Dockerfile.simple
 docker-compose.prod.yml
+casestudy/
