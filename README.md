@@ -29,15 +29,44 @@ At the heart of the system is the **Wav2Vec2-Base-960h** transformer. We leverag
 -   **Global Average Pooling:** Instead of simple temporal slices, we compute the mean across the last hidden state (768 dimensions), capturing a holistic spectral signature of the speaker's vocal health.
 -   **Contextual Encoding:** The transformer captures long-range dependencies in speech, identifying the "slurring" or "strained" qualities characteristic of dysarthria.
 
-### Local API Development
-```bash
-# Install core dependencies
-pip install -r api/requirements.txt
+### 🛠️ Local Installation (Without Docker)
 
-# Start the inference worker
+If you prefer to run the system directly on your host machine, follow these steps:
+
+#### 1. System Requirements
+- **Python:** 3.8 - 3.12
+- **Redis:** Required as a message broker.
+- **FFmpeg:** Required for audio processing.
+
+#### 2. Install Redis & FFmpeg
+```bash
+# Ubuntu/Debian
+sudo apt update && sudo apt install -y redis-server ffmpeg libsndfile1
+
+# MacOS (using Homebrew)
+brew install redis ffmpeg
+```
+
+#### 3. Setup Virtual Environment
+```bash
+python -m venv venv
+source venv/bin/activate  # Linux/MacOS
+# venv\Scripts\activate  # Windows
+
+# Install CPU-optimized dependencies
+pip install --upgrade pip
+pip install -r api/requirements.txt
+```
+
+#### 4. Configure & Launch
+```bash
+# 1. Start Redis in a separate terminal
+redis-server
+
+# 2. Start the Celery Worker (Inference Engine)
 python -m celery -A api.celery_app worker --loglevel=info
 
-# Start the web server
+# 3. Start the FastAPI Server
 python api/main.py
 ```
 
@@ -110,14 +139,40 @@ SpeechScan/
 
 ---
 
-## 🛠️ Production Tech Stack
+## 📖 Comprehensive "How to Use" Guide
 
--   **Deep Learning Frameworks:** PyTorch (for Wav2Vec2) & TensorFlow (for FNN Classification).
--   **Orchestration:** **Celery 5.3** with **Redis 7** as the high-throughput message broker.
--   **API Framework:** **FastAPI 0.104** (Asynchronous, Type-Safe, OpenAPI compliant).
--   **Persistence:** **Firebase Admin SDK** for analysis history tracking.
--   **Audio Processing:** **Librosa** & **SoundFile** for floating-point accuracy.
--   **DevOps:** **Docker** multi-stage builds for container optimization.
+### 🌐 Method 1: Interactive Web Dashboard
+The most user-friendly way to interact with SpeechScan.
+1.  **Launch:** Visit `http://localhost:8000` after starting the services.
+2.  **Upload/Record:** Use the interface to either record live audio (limited to 10s) or drag & drop an existing `.wav` or `.mp3` file.
+3.  **Analyze:** Click "Analyze Audio". The interface will switch to a "Processing" state while the Celery worker handles the inference.
+4.  **Results:** View your **Health Status** (Normal/Moderate/Mild), **Clarity Score**, and **Acoustic Notes**.
+
+### 💻 Method 2: Research CLI (predict.py)
+Ideal for batch processing and researchers.
+```bash
+# Single file analysis
+python predict.py example.wav
+
+# Batch directory analysis (outputs result.csv)
+python predict.py ./audio_folder --batch --output results.csv
+
+# Verbose research mode (prints layer-by-layer status)
+python predict.py example.wav --verbose
+```
+
+### 🔌 Method 3: REST API Integration
+For integrating SpeechScan into your own applications.
+1.  **Submit Job:**
+    ```bash
+    curl -X POST "http://localhost:8000/predict" -F "file=@audio.wav"
+    # Returns: {"job_id": "...", "status": "pending"}
+    ```
+2.  **Poll for Results:**
+    ```bash
+    curl "http://localhost:8000/results/{job_id}"
+    # Returns: {"status": "completed", "result": {...}}
+    ```
 
 ---
 
