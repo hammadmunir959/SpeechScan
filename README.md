@@ -66,12 +66,16 @@ The model's intelligence is derived from two primary high-quality datasets, cura
 
 ---
 
-## 🛠️ Usage & Deployment
+## 🧪 Research & Development (NB)
 
-### Global Deployment (Docker Hub)
-The production-ready images are available for immediate scale:
-- **API Server:** `hammadmunir959/speechscan:api-v1`
-- **Inference Worker:** `hammadmunir959/speechscan:worker-v1`
+The core ML research and experimental results are documented in the `notebook/` directory. This includes the full training loop, feature extraction logic, and the from-scratch design of the classification heads.
+
+-   **Notebook:** `notebook/dyarthria_model.ipynb`
+-   **Python Export:** `notebook/dyarthria_model.py`
+
+---
+
+## 🛠️ Deployment
 
 ### Quick Start with Docker
 ```bash
