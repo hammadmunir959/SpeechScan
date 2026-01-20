@@ -81,6 +81,7 @@ async def load_models_async():
 
 async def broadcast_loading_update():
     """Broadcast loading update to all connected WebSocket clients"""
+    global websocket_connections
     if websocket_connections:
         message = {
             "type": "progress_update",
@@ -134,12 +135,12 @@ app.add_middleware(
 )
 
 # Mount static files
-app.mount("/static", StaticFiles(directory="../web_interface"), name="static")
+app.mount("/static", StaticFiles(directory=str(settings.BASE_DIR / "web_interface")), name="static")
 
 @app.get("/", response_class=HTMLResponse)
 async def serve_web_interface():
     """Serve the web interface"""
-    web_interface_path = Path("../web_interface/index.html")
+    web_interface_path = settings.BASE_DIR / "web_interface" / "index.html"
     if web_interface_path.exists():
         with open(web_interface_path, "r", encoding="utf-8") as f:
             return HTMLResponse(content=f.read())
@@ -278,9 +279,12 @@ async def predict_audio(file: UploadFile = File(...)):
         if len(file_ext) > 5 or not file_ext.isalnum():
             file_ext = "webm"
             
-        temp_filename = f"temp_audio_{uuid.uuid4()}.{file_ext}"
-        # ABSOLUTE path is safer for passing to worker if using shared volume
-        temp_file_path = os.path.abspath(temp_filename)
+        temp_dir = settings.BASE_DIR / "temp_audio"
+        temp_dir.mkdir(exist_ok=True)
+            
+        temp_filename = f"speech_sample_{uuid.uuid4()}.{file_ext}"
+        # Save to temp_audio directory
+        temp_file_path = temp_dir / temp_filename
         
         with open(temp_file_path, "wb") as buffer:
             while content := await file.read(1024 * 1024):
@@ -342,7 +346,7 @@ async def health_check():
 if __name__ == "__main__":
     # Run the server
     uvicorn.run(
-        "main:app",
+        "api.main:app",
         host="0.0.0.0",
         port=8000,
         reload=False,

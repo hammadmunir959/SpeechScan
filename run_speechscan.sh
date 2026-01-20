@@ -29,28 +29,55 @@ else
     echo -e "${GREEN}✅ Redis is running.${NC}"
 fi
 
-# 2. Setup Virtual Environment
-if [ ! -d "venv" ]; then
-    echo -e "${BLUE}📦 Creating virtual environment...${NC}"
-    python3 -m venv venv
+# 2. Setup Virtual Environment (Local .venv)
+VENV_PATH="./.venv"
+
+if [ ! -d "$VENV_PATH" ]; then
+    echo -e "${YELLOW}⚠️ Local virtual environment not found. Creating it...${NC}"
+    python3 -m venv "$VENV_PATH"
+    echo -e "${BLUE}🐍 Activating new venv and installing dependencies...${NC}"
+    source "$VENV_PATH/bin/activate"
+    pip install --upgrade pip setuptools wheel
+    if [ -f "api/requirements.txt" ]; then
+        pip install -r api/requirements.txt
+    else
+        echo -e "${YELLOW}⚠️ api/requirements.txt not found. Skipping auto-installation.${NC}"
+    fi
+else
+    echo -e "${BLUE}🐍 Activating local virtual environment: $VENV_PATH${NC}"
+    source "$VENV_PATH/bin/activate"
 fi
 
-echo -e "${BLUE}🐍 Activating virtual environment and installing dependencies...${NC}"
-source venv/bin/activate
-pip install --upgrade pip
-pip install -r api/requirements.txt
+# 3. Production Environment Prep
+export PYTHONPATH=$PYTHONPATH:$(pwd)
 
-# 3. Start Celery Worker in background
+# Check if port 8000 is already in use
+if lsof -Pi :8000 -sTCP:LISTEN -t >/dev/null ; then
+    echo -e "${YELLOW}⚠️ Warning: Port 8000 is already in use. Attempting to kill the process...${NC}"
+    fuser -k 8000/tcp &> /dev/null
+    sleep 1
+fi
+
+# 4. Start Celery Worker in background
 echo -e "${BLUE}🤖 Starting Celery Inference Worker...${NC}"
 python3 -m celery -A api.celery_app worker --loglevel=info > worker.log 2>&1 &
 WORKER_PID=$!
 echo -e "${GREEN}✅ Worker started (PID: $WORKER_PID). Logs: worker.log${NC}"
 
-# 4. Start FastAPI Server
+# 5. Start FastAPI Server
 echo -e "${BLUE}🌐 Starting SpeechScan API & Web Interface...${NC}"
 echo -e "${YELLOW}Dashboard available at: http://localhost:8000${NC}"
 
-# Cleanup on exit
-trap "kill $WORKER_PID; echo -e '\n${YELLOW}🛑 Shutting down...${NC}'; exit" SIGINT SIGTERM
+# Robust Cleanup on exit
+function cleanup() {
+    echo -e "\n${YELLOW}🛑 Shutting down SpeechScan components...${NC}"
+    kill $WORKER_PID 2>/dev/null
+    # Kill any other leftover processes on port 8000
+    fuser -k 8000/tcp &> /dev/null
+    echo -e "${GREEN}✅ Cleanup complete.${NC}"
+    exit
+}
 
-python3 api/main.py
+trap cleanup SIGINT SIGTERM
+
+python3 -m api.main

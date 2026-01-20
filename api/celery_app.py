@@ -1,3 +1,4 @@
+from celery import Celery
 from api.config import settings
 
 # Configure Celery to use Redis as the broker and result backend

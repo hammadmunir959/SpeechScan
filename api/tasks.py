@@ -5,7 +5,7 @@ from api.config import settings
 from api.logging_config import setup_logging
 from api.database import db
 from api.storage import get_storage
-from predict import DysarthriaGenderPredictor
+# from predict import DysarthriaGenderPredictor # Moved to lazy load
 
 # Initialize structured logging
 setup_logging()
@@ -22,9 +22,17 @@ def get_predictor():
     global _predictor
     if _predictor is None:
         logger.info("🤖 Initializing DysarthriaGenderPredictor in worker...")
-        # Use settings for model directory
-        _predictor = DysarthriaGenderPredictor(model_dir=settings.MODEL_DIR)
-        logger.info("✅ Predictor initialized")
+        try:
+            from predict import DysarthriaGenderPredictor
+            # Use settings for model directory
+            _predictor = DysarthriaGenderPredictor(model_dir=settings.MODEL_DIR)
+            logger.info("✅ Predictor initialized")
+        except ImportError as e:
+            logger.error(f"❌ Failed to import predictor: {e}")
+            raise
+        except Exception as e:
+            logger.error(f"❌ Failed to initialize predictor: {e}")
+            raise
     return _predictor
 
 @app.task(bind=True, name="api.tasks.predict_task")
